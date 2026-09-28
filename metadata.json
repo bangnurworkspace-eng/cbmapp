@@ -1,0 +1,6 @@
+{
+  "name": "CBM WEB APP - Tabang Mining Project",
+  "description": "Condition Based Maintenance (CBM) enterprise monitoring system for mining equipment inspection, condition ratings, and unit history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

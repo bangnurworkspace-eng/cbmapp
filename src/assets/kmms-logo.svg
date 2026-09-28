@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 520" width="100%" height="100%">
+  <!-- KMMS Authentic Logo matching WhatsApp_Image_2026-09-26_at_01.52.40-removebg-preview.png -->
+  
+  <g fill="#008000">
+    <!-- 1. Top Chevron Roof Bar -->
+    <path d="M 200 15 L 325 85 L 325 120 L 200 50 L 75 120 L 75 85 Z" />
+
+    <!-- 2. Main Outer Green Hexagon Body -->
+    <path d="
+      M 75 132 
+      L 200 62 
+      L 325 132 
+      L 325 298 
+      L 200 368 
+      L 75 298 
+      Z
+      M 115 158 
+      L 115 278 
+      L 200 326 
+      L 285 278 
+      L 285 158 
+      L 200 110 
+      Z
+    " fill-rule="evenodd" />
+
+    <!-- 3. Inner 'P' Left Stem & Right Loop Structure -->
+    <!-- Vertical left stem of 'P' -->
+    <path d="M 115 158 L 155 135 L 155 278 L 115 255 Z" />
+    <!-- Loop wrapping around upper right -->
+    <path d="M 155 135 L 255 192 L 255 258 L 215 282 L 215 238 L 228 230 L 228 208 L 155 168 Z" />
+  </g>
+
+  <!-- 4. Central 3D Cube with 3 distinct green faces -->
+  <!-- Top Face: Lighter Bright Green -->
+  <polygon points="200,180 242,204 200,228 158,204" fill="#00E020" />
+  <!-- Left Face: Shadowed Dark Green -->
+  <polygon points="158,204 200,228 200,280 158,256" fill="#005A08" />
+  <!-- Right Face: Medium Green -->
+  <polygon points="200,228 242,204 242,256 200,280" fill="#009A15" />
+
+  <!-- 5. Vector KMMS Typography -->
+  <text 
+    x="200" 
+    y="462" 
+    font-family="'Impact', 'Arial Black', 'Trebuchet MS', sans-serif" 
+    font-size="86" 
+    font-weight="900" 
+    fill="#008000" 
+    text-anchor="middle" 
+    letter-spacing="3"
+  >
+    KMMS
+  </text>
+</svg>
