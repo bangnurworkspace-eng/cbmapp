@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MasterComponent, ComponentCsvValidationPreview } from '../types/masterComponent';
 import { Inspection } from '../types/inspection';
 import {
   getMasterComponents,
+  fetchMasterComponents,
   createComponent,
   updateComponent,
   deleteOrDeactivateComponent,
@@ -44,6 +45,17 @@ export const MasterComponentPage: React.FC<MasterComponentPageProps> = ({
   onNavigateToInspection,
 }) => {
   const [components, setComponents] = useState<MasterComponent[]>(() => getMasterComponents());
+
+  // Load components directly from Google Sheets API
+  useEffect(() => {
+    let active = true;
+    fetchMasterComponents().then((data) => {
+      if (active) setComponents(data);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
 
@@ -153,7 +165,7 @@ export const MasterComponentPage: React.FC<MasterComponentPageProps> = ({
         return;
       }
 
-      const updated = getMasterComponents();
+      const updated = await getMasterComponents();
       setComponents(updated);
       setIsModalOpen(false);
       triggerToast(`Component "${trimmed}" updated successfully.`);
@@ -165,7 +177,7 @@ export const MasterComponentPage: React.FC<MasterComponentPageProps> = ({
         return;
       }
 
-      const updated = getMasterComponents();
+      const updated = await getMasterComponents();
       setComponents(updated);
       setIsModalOpen(false);
       triggerToast(`Component "${trimmed}" added to Master Components.`);
@@ -180,7 +192,7 @@ export const MasterComponentPage: React.FC<MasterComponentPageProps> = ({
     const isUsed = count > 0;
 
     const res = await deleteOrDeactivateComponent(deleteTarget.id, isUsed);
-    const updated = getMasterComponents();
+    const updated = await getMasterComponents();
     setComponents(updated);
     setDeleteTarget(null);
 
@@ -192,8 +204,8 @@ export const MasterComponentPage: React.FC<MasterComponentPageProps> = ({
   };
 
   // Clear all components completely
-  const handleExecuteClearAll = () => {
-    clearAllComponents();
+  const handleExecuteClearAll = async () => {
+    await clearAllComponents();
     setComponents([]);
     setIsClearAllModalOpen(false);
     triggerToast('Seluruh data Master Components berhasil dihapus.', 'info');

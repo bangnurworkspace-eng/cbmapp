@@ -1,9 +1,32 @@
 import { MasterComponent, ComponentCsvValidationPreview } from '../types/masterComponent';
 import { Inspection } from '../types/inspection';
-import { RAW_MASTER_COMPONENTS_CSV } from '../data/initialMasterComponentsCsv';
-import { getGoogleAppsScriptUrl, syncComponentToSheets } from './googleSheets';
+import { fetchMasterComponentsFromSheets, syncComponentToSheets, isScriptUrlConfigured } from './googleSheets';
 
-export const MASTER_COMPONENTS_STORAGE_KEY = 'cbm_master_components_v2';
+let currentMasterComponentsInMemory: MasterComponent[] = [];
+
+/**
+ * Synchronously returns current master components list.
+ * Guaranteed to return an array (MasterComponent[]).
+ */
+export function getMasterComponents(): MasterComponent[] {
+  return currentMasterComponentsInMemory;
+}
+
+/**
+ * Asynchronously fetches master components directly from Google Sheets API.
+ */
+export async function fetchMasterComponents(): Promise<MasterComponent[]> {
+  if (!isScriptUrlConfigured()) return currentMasterComponentsInMemory;
+  try {
+    const data = await fetchMasterComponentsFromSheets();
+    if (Array.isArray(data)) {
+      currentMasterComponentsInMemory = data;
+    }
+  } catch {
+    // Silent catch when server connection is unconfigured or unreachable
+  }
+  return currentMasterComponentsInMemory;
+}
 
 /**
  * Format sequential ID: CMP-001, CMP-002, ...
@@ -48,7 +71,6 @@ export function parseMasterComponentsCsv(csvText: string): MasterComponent[] {
   const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length === 0) return [];
 
-  // Determine header index
   const headerLine = lines[0];
   const delimiter = headerLine.includes(';') ? ';' : ',';
   const headers = headerLine.split(delimiter).map((h) => h.trim().toLowerCase());
@@ -86,56 +108,25 @@ export function parseMasterComponentsCsv(csvText: string): MasterComponent[] {
 }
 
 /**
- * Loads master components from storage. Returns empty array if none exist or cleared.
+ * Saves master components array to Google Sheets
  */
-export function getMasterComponents(): MasterComponent[] {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  try {
-    const stored = localStorage.getItem(MASTER_COMPONENTS_STORAGE_KEY);
-    if (!stored) {
-      localStorage.setItem(MASTER_COMPONENTS_STORAGE_KEY, JSON.stringify([]));
-      return [];
-    }
-
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-
-    return [];
-  } catch (err) {
-    console.error('Error loading master components from storage:', err);
-    return [];
-  }
+export async function saveMasterComponents(list: MasterComponent[]): Promise<boolean> {
+  const ok = await syncComponentToSheets('importComponents', { components: list });
+  if (ok) currentMasterComponentsInMemory = list;
+  return ok;
 }
 
 /**
- * Saves master components array to storage and Google Sheets
+ * Clears all master components from Google Sheets
  */
-export function saveMasterComponents(list: MasterComponent[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(MASTER_COMPONENTS_STORAGE_KEY, JSON.stringify(list));
-    syncComponentToSheets('importComponents', { components: list });
-  } catch (err) {
-    console.error('Error saving master components to storage:', err);
-  }
+export async function clearAllComponents(): Promise<boolean> {
+  const ok = await syncComponentToSheets('importComponents', { components: [] });
+  if (ok) currentMasterComponentsInMemory = [];
+  return ok;
 }
 
 /**
- * Clears all master components from storage and Google Sheets
- */
-export function clearAllComponents(): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(MASTER_COMPONENTS_STORAGE_KEY, JSON.stringify([]));
-  syncComponentToSheets('importComponents', { components: [] });
-}
-
-/**
- * Adds a new component to master data
+ * Adds a new component to master data in Google Sheets
  */
 export async function createComponent(
   name: string,
@@ -168,35 +159,24 @@ export async function createComponent(
     updatedAt: today,
   };
 
-  const updatedList = [...currentList, newComponent];
-  saveMasterComponents(updatedList);
+  const success = await syncComponentToSheets('createComponent', {
+    ID: newComponent.id,
+    COMPONENT_NAME: newComponent.componentName,
+    STATUS: newComponent.status,
+    CREATED_AT: newComponent.createdAt,
+    UPDATED_AT: newComponent.updatedAt,
+  });
 
-  // Sync to Google Apps Script if URL is configured
-  const scriptUrl = getGoogleAppsScriptUrl();
-  if (scriptUrl) {
-    try {
-      await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'createComponent',
-          ID: newComponent.id,
-          COMPONENT_NAME: newComponent.componentName,
-          STATUS: newComponent.status,
-          CREATED_AT: newComponent.createdAt,
-          UPDATED_AT: newComponent.updatedAt,
-        }),
-      });
-    } catch (e) {
-      console.warn('Remote Google Apps Script sync warning for createComponent:', e);
-    }
+  if (success) {
+    await fetchMasterComponents();
+    return { success: true, component: newComponent, message: 'Component successfully created in Google Sheets.' };
+  } else {
+    return { success: false, message: 'Unable to connect to database.' };
   }
-
-  return { success: true, component: newComponent, message: 'Component successfully created.' };
 }
 
 /**
- * Updates an existing component
+ * Updates an existing component in Google Sheets
  */
 export async function updateComponent(
   updated: MasterComponent
@@ -204,7 +184,6 @@ export async function updateComponent(
   const currentList = getMasterComponents();
   const trimmedName = updated.componentName.trim();
 
-  // Check duplicate name on other items
   const duplicate = currentList.find(
     (c) => c.id !== updated.id && c.componentName.toLowerCase().trim() === trimmedName.toLowerCase()
   );
@@ -217,44 +196,23 @@ export async function updateComponent(
   }
 
   const today = formatStandardDate();
-  const finalList = currentList.map((item) =>
-    item.id === updated.id
-      ? {
-          ...item,
-          componentName: trimmedName,
-          status: updated.status,
-          updatedAt: today,
-        }
-      : item
-  );
+  const success = await syncComponentToSheets('updateComponent', {
+    ID: updated.id,
+    COMPONENT_NAME: trimmedName,
+    STATUS: updated.status,
+    UPDATED_AT: today,
+  });
 
-  saveMasterComponents(finalList);
-
-  // Sync to Google Apps Script
-  const scriptUrl = getGoogleAppsScriptUrl();
-  if (scriptUrl) {
-    try {
-      await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'updateComponent',
-          ID: updated.id,
-          COMPONENT_NAME: trimmedName,
-          STATUS: updated.status,
-          UPDATED_AT: today,
-        }),
-      });
-    } catch (e) {
-      console.warn('Remote Google Apps Script sync warning for updateComponent:', e);
-    }
+  if (success) {
+    await fetchMasterComponents();
+    return { success: true, message: 'Component successfully updated in Google Sheets.' };
+  } else {
+    return { success: false, message: 'Unable to connect to database.' };
   }
-
-  return { success: true, message: 'Component successfully updated.' };
 }
 
 /**
- * Deletes or sets inactive a component
+ * Deletes or sets inactive a component in Google Sheets
  */
 export async function deleteOrDeactivateComponent(
   componentId: string,
@@ -269,49 +227,27 @@ export async function deleteOrDeactivateComponent(
   const today = formatStandardDate();
 
   if (forceDeactivate) {
-    // Mark as INACTIVE
-    const updatedList = currentList.map((c) =>
-      c.id === componentId ? { ...c, status: 'INACTIVE' as const, updatedAt: today } : c
-    );
-    saveMasterComponents(updatedList);
-
-    const scriptUrl = getGoogleAppsScriptUrl();
-    if (scriptUrl) {
-      try {
-        await fetch(scriptUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'updateComponent',
-            ID: componentId,
-            STATUS: 'INACTIVE',
-            UPDATED_AT: today,
-          }),
-        });
-      } catch (e) {}
-    }
-
-    return { success: true, message: `Component "${target.componentName}" has been set to INACTIVE for data integrity.`, actionTaken: 'INACTIVE' };
+    const success = await syncComponentToSheets('updateComponent', {
+      ID: componentId,
+      STATUS: 'INACTIVE',
+      UPDATED_AT: today,
+    });
+    if (success) await fetchMasterComponents();
+    return {
+      success,
+      message: success ? `Component "${target.componentName}" set to INACTIVE.` : 'Unable to connect to database.',
+      actionTaken: 'INACTIVE',
+    };
   } else {
-    // Permanent deletion
-    const updatedList = currentList.filter((c) => c.id !== componentId);
-    saveMasterComponents(updatedList);
-
-    const scriptUrl = getGoogleAppsScriptUrl();
-    if (scriptUrl) {
-      try {
-        await fetch(scriptUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'deleteComponent',
-            ID: componentId,
-          }),
-        });
-      } catch (e) {}
-    }
-
-    return { success: true, message: `Component "${target.componentName}" has been permanently deleted.`, actionTaken: 'DELETED' };
+    const success = await syncComponentToSheets('deleteComponent', {
+      ID: componentId,
+    });
+    if (success) await fetchMasterComponents();
+    return {
+      success,
+      message: success ? `Component "${target.componentName}" permanently deleted.` : 'Unable to connect to database.',
+      actionTaken: 'DELETED',
+    };
   }
 }
 
@@ -403,8 +339,6 @@ export function validateComponentCsvImport(
     }
 
     const key = compName.toLowerCase();
-
-    // Check duplicate in existing database
     const existing = existingMap.get(key);
     if (existing) {
       duplicates.push({
@@ -415,7 +349,6 @@ export function validateComponentCsvImport(
       continue;
     }
 
-    // Check duplicate in same batch
     if (seenInBatch.has(key)) {
       duplicates.push({
         incomingName: compName,
@@ -444,7 +377,7 @@ export function validateComponentCsvImport(
 }
 
 /**
- * Executes CSV import and updates persistent storage
+ * Executes CSV import and sends updated list to Google Sheets
  */
 export async function executeComponentCsvImport(
   preview: ComponentCsvValidationPreview,
@@ -464,7 +397,6 @@ export async function executeComponentCsvImport(
   let updatedCount = 0;
   const today = formatStandardDate();
 
-  // Find start seq
   let maxSeq = 0;
   currentComponents.forEach((c) => {
     const m = c.id.match(/^CMP-(\d+)$/i);
@@ -474,7 +406,6 @@ export async function executeComponentCsvImport(
     }
   });
 
-  // Add all valid rows
   preview.validItems.forEach((item) => {
     const key = item.componentName.toLowerCase().trim();
     if (!compMap.has(key)) {
@@ -491,7 +422,6 @@ export async function executeComponentCsvImport(
     }
   });
 
-  // Handle duplicates if update requested
   if (duplicateAction === 'update') {
     preview.duplicates.forEach((d) => {
       const key = d.incomingName.toLowerCase().trim();
@@ -499,7 +429,7 @@ export async function executeComponentCsvImport(
       if (existing) {
         compMap.set(key, {
           ...existing,
-          componentName: d.incomingName, // maintain capitalization from incoming CSV
+          componentName: d.incomingName,
           status: 'ACTIVE',
           updatedAt: today,
         });
@@ -509,70 +439,11 @@ export async function executeComponentCsvImport(
   }
 
   const updatedList = Array.from(compMap.values());
-  saveMasterComponents(updatedList);
-
-  // Sync import to Google Apps Script if URL configured
-  const scriptUrl = getGoogleAppsScriptUrl();
-  if (scriptUrl) {
-    try {
-      await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'importComponents',
-          components: updatedList,
-        }),
-      });
-    } catch (e) {
-      console.warn('Google Apps Script importComponents warning:', e);
-    }
-  }
+  await saveMasterComponents(updatedList);
 
   return {
     updatedList,
     importedCount,
     updatedCount,
   };
-}
-
-/**
- * Fetches components from Google Apps Script Web App
- */
-export async function fetchComponentsFromGoogleSheets(): Promise<{
-  success: boolean;
-  data: MasterComponent[];
-  message?: string;
-}> {
-  const scriptUrl = getGoogleAppsScriptUrl();
-  if (!scriptUrl) {
-    return {
-      success: true,
-      data: getMasterComponents(),
-    };
-  }
-
-  try {
-    const url = `${scriptUrl}?action=getComponents`;
-    const response = await fetch(url, { method: 'GET' });
-    const result = await response.json();
-
-    if (result && result.success && Array.isArray(result.data)) {
-      const mapped: MasterComponent[] = result.data.map((row: any, idx: number) => ({
-        id: String(row.ID || row.id || formatComponentId(idx + 1)),
-        componentName: String(row.COMPONENT_NAME || row.componentName || row.name || '').trim(),
-        status: (String(row.STATUS || row.status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE') as 'ACTIVE' | 'INACTIVE',
-        createdAt: String(row.CREATED_AT || row.createdAt || formatStandardDate()),
-        updatedAt: String(row.UPDATED_AT || row.updatedAt || formatStandardDate()),
-      })).filter((c: MasterComponent) => c.componentName.length > 0);
-
-      if (mapped.length > 0) {
-        saveMasterComponents(mapped);
-        return { success: true, data: mapped, message: `Loaded ${mapped.length} components from database` };
-      }
-    }
-    return { success: true, data: getMasterComponents() };
-  } catch (err: any) {
-    console.warn('Failed to fetch components from database:', err);
-    return { success: false, data: getMasterComponents(), message: err.message };
-  }
 }

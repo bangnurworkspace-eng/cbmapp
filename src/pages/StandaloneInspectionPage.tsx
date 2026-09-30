@@ -6,7 +6,7 @@ import {
 } from '../types/standaloneInspection';
 import {
   getStandaloneInspections,
-  saveStandaloneInspections,
+  fetchStandaloneInspections,
   createStandaloneInspection,
   updateStandaloneInspection,
   deleteStandaloneInspection,
@@ -61,9 +61,8 @@ export const StandaloneInspectionPage: React.FC<StandaloneInspectionPageProps> =
   // Auto-sync items from Google Sheets on mount
   useEffect(() => {
     let isMounted = true;
-    fetchStandaloneInspectionsFromSheets().then((remote) => {
-      if (isMounted && remote && remote.length > 0) {
-        saveStandaloneInspections(remote);
+    fetchStandaloneInspections().then((remote) => {
+      if (isMounted) {
         setItems(remote);
       }
     });
@@ -233,7 +232,7 @@ export const StandaloneInspectionPage: React.FC<StandaloneInspectionPageProps> =
   };
 
   // Submit Form
-  const handleSubmitForm = (e: React.FormEvent) => {
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -294,11 +293,12 @@ export const StandaloneInspectionPage: React.FC<StandaloneInspectionPageProps> =
         actionImage: formStatus === 'CLOSED' ? (formActionImage.trim() || undefined) : (editingItem.actionImage || undefined),
       };
 
-      const newList = updateStandaloneInspection(updatedItem);
+      await updateStandaloneInspection(updatedItem);
+      const newList = await getStandaloneInspections();
       setItems(newList);
       showToast(`Inspection ${editingItem.id} berhasil diperbarui!`);
     } else {
-      createStandaloneInspection({
+      await createStandaloneInspection({
         unitId: cleanUnit,
         unitModel: cleanModel || undefined,
         date: cleanDate,
@@ -313,7 +313,8 @@ export const StandaloneInspectionPage: React.FC<StandaloneInspectionPageProps> =
         actionDetails: formStatus === 'CLOSED' ? formActionDetails.trim() : undefined,
         actionImage: formStatus === 'CLOSED' ? formActionImage.trim() || undefined : undefined,
       });
-      setItems(getStandaloneInspections());
+      const newList = await getStandaloneInspections();
+      setItems(newList);
       showToast('Data Inspection baru berhasil ditambahkan!');
     }
 
@@ -321,24 +322,25 @@ export const StandaloneInspectionPage: React.FC<StandaloneInspectionPageProps> =
   };
 
   // Quick Status Toggle directly from table
-  const handleQuickStatusChange = (item: StandaloneInspectionItem, newStatus: StandaloneInspectionStatus) => {
+  const handleQuickStatusChange = async (item: StandaloneInspectionItem, newStatus: StandaloneInspectionStatus) => {
     if (newStatus === 'CLOSED' && (!item.actionBy || !item.actionDetails)) {
-      // If closing without filled action details, open edit modal to prompt action details
       handleOpenEditModal({ ...item, status: 'CLOSED' });
       showToast('Lengkapi data Action By & Kegiatan Action terlebih dahulu', 'info');
       return;
     }
 
-    const updated = updateStandaloneInspection({ ...item, status: newStatus });
-    setItems(updated);
-    showToast(`Status Inspection ${item.id} diubah ke ${newStatus}`, 'info');
+    await updateStandaloneInspection({ ...item, status: newStatus });
+    const newList = await getStandaloneInspections();
+    setItems(newList);
+    showToast(`Status ${item.id} diubah ke ${newStatus}`, 'info');
   };
 
   // Confirm Delete
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deletingId) return;
-    const updated = deleteStandaloneInspection(deletingId);
-    setItems(updated);
+    await deleteStandaloneInspection(deletingId);
+    const newList = await getStandaloneInspections();
+    setItems(newList);
     setDeletingId(null);
     showToast('Data Inspection berhasil dihapus.', 'info');
   };

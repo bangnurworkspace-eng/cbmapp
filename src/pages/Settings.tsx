@@ -25,12 +25,11 @@ import {
   getGoogleAppsScriptUrl,
   setGoogleAppsScriptUrl,
   getSampleAppsScriptCode,
-  resetToDemoData,
+  updateAppPasswordOnServer,
 } from '../services/googleSheets';
 import {
   BrandingSettings,
   DEFAULT_BRANDING_SETTINGS,
-  resetBrandingSettings,
 } from '../services/brandingService';
 import kmmsLogoSvg from '../assets/kmms-logo.svg';
 
@@ -70,13 +69,8 @@ export const Settings: React.FC<SettingsProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passStatus, setPassStatus] = useState<{ success: boolean; message: string } | null>(null);
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    const currentStoredPass = localStorage.getItem('cbm_app_password') || 'cbmwebapp';
-    if (oldPassword !== currentStoredPass) {
-      setPassStatus({ success: false, message: 'Password lama tidak sesuai!' });
-      return;
-    }
     if (!newPassword || newPassword.trim().length < 4) {
       setPassStatus({ success: false, message: 'Password baru minimal 4 karakter!' });
       return;
@@ -86,11 +80,19 @@ export const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
-    localStorage.setItem('cbm_app_password', newPassword.trim());
-    setPassStatus({ success: true, message: 'Password otorisasi berhasil diperbarui!' });
-    setOldPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
+    try {
+      const ok = await updateAppPasswordOnServer(oldPassword, newPassword.trim());
+      if (ok) {
+        setPassStatus({ success: true, message: 'Password otorisasi berhasil diperbarui di Google Sheets!' });
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        setPassStatus({ success: false, message: 'Gagal memperbarui password. Pastikan password lama benar.' });
+      }
+    } catch (err: any) {
+      setPassStatus({ success: false, message: 'Gagal menghubungkan ke server.' });
+    }
     setTimeout(() => setPassStatus(null), 4000);
   };
 
@@ -142,7 +144,7 @@ export const Settings: React.FC<SettingsProps> = ({
 
   const handleResetBrandingToDefault = () => {
     if (confirm('Kembalikan semua logo, nama aplikasi, dan nama halaman ke pengaturan default?')) {
-      const def = resetBrandingSettings();
+      const def = DEFAULT_BRANDING_SETTINGS;
       setLocalBranding(def);
       onUpdateBranding(def);
       setBrandingSaved(true);
@@ -166,7 +168,16 @@ export const Settings: React.FC<SettingsProps> = ({
       setIsTesting(false);
       setTestResult({
         success: false,
-        message: 'Please enter a Web App URL first.',
+        message: 'Masukkan URL Web App Google Apps Script terlebih dahulu.',
+      });
+      return;
+    }
+
+    if (!testTarget.includes('script.google.com/macros/s/') || testTarget.includes('_OFFICIAL')) {
+      setIsTesting(false);
+      setTestResult({
+        success: false,
+        message: 'URL tidak valid. Silakan gunakan Web App URL resmi dari Google Apps Script (Extensions > Apps Script > Deploy > New deployment > Who has access: Anyone).',
       });
       return;
     }
@@ -179,6 +190,7 @@ export const Settings: React.FC<SettingsProps> = ({
       const res = await fetch(url.toString(), {
         method: 'GET',
         headers: { Accept: 'application/json' },
+        redirect: 'follow',
       });
 
       if (!res.ok) {
@@ -189,17 +201,20 @@ export const Settings: React.FC<SettingsProps> = ({
       if (json && (json.success === true || Array.isArray(json.data) || Array.isArray(json))) {
         setTestResult({
           success: true,
-          message: 'Connection successful! Verified Web App API responding with valid JSON.',
+          message: 'Koneksi Berhasil! Google Apps Script Web App terhubung dan merespons data dengan baik.',
         });
         setGoogleAppsScriptUrl(testTarget);
         onRefreshData();
       } else {
-        throw new Error(json.message || 'Invalid JSON format received from Web App API');
+        throw new Error(json.message || 'Format respon dari server tidak valid.');
       }
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: `Connection test failed: ${err.message}. Verify Web App access is set to "Anyone".`,
+        message: `Koneksi gagal (${err.message || 'Gagal terhubung'}). Pastikan pengaturan Deploy Google Apps Script:
+1. "Execute as": Me
+2. "Who has access": Anyone (Siapa Saja)
+3. Buat "New deployment" baru untuk menerapkan perubahan kode script.`,
       });
     } finally {
       setIsTesting(false);
@@ -213,10 +228,7 @@ export const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleResetDemo = () => {
-    if (confirm('Reset fleet inspection database to initial Tabang Mining Project demo records?')) {
-      resetToDemoData();
-      onRefreshData();
-    }
+    onRefreshData();
   };
 
   const formatLastSync = (d: Date | null) => {

@@ -1,62 +1,39 @@
 import {
   StandaloneInspectionItem,
   StandaloneInspectionStats,
-  StandaloneInspectionStatus,
-  StandaloneInspectionPriority,
 } from '../types/standaloneInspection';
-import { syncStandaloneInspectionToSheets } from './googleSheets';
+import { syncStandaloneInspectionToSheets, fetchStandaloneInspectionsFromSheets, isScriptUrlConfigured } from './googleSheets';
 
-export const STANDALONE_INSPECTION_STORAGE_KEY = 'cbm_standalone_inspection_page_v1';
+let currentStandaloneInspectionsInMemory: StandaloneInspectionItem[] = [];
 
+/**
+ * Synchronously returns current standalone inspections list.
+ * Guaranteed to return an array (StandaloneInspectionItem[]).
+ */
 export function getStandaloneInspections(): StandaloneInspectionItem[] {
-  try {
-    const raw = localStorage.getItem(STANDALONE_INSPECTION_STORAGE_KEY);
-    if (!raw) {
-      saveStandaloneInspections([]);
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    saveStandaloneInspections([]);
-    return [];
-  } catch (err) {
-    console.error('Error loading standalone inspections:', err);
-    return [];
-  }
+  return currentStandaloneInspectionsInMemory;
 }
 
-export function saveStandaloneInspections(items: StandaloneInspectionItem[]): void {
+/**
+ * Asynchronously fetches standalone inspections directly from Google Sheets API.
+ */
+export async function fetchStandaloneInspections(): Promise<StandaloneInspectionItem[]> {
+  if (!isScriptUrlConfigured()) return currentStandaloneInspectionsInMemory;
   try {
-    localStorage.setItem(STANDALONE_INSPECTION_STORAGE_KEY, JSON.stringify(items));
-  } catch (err) {
-    console.warn('LocalStorage quota exceeded when saving standalone inspections. Applying image truncation fallback:', err);
-    try {
-      // Fallback: truncate heavy base64 strings from older items so localStorage does not crash
-      const sanitized = items.map((item, idx) => {
-        if (idx > 3) {
-          return {
-            ...item,
-            findingsImage: item.findingsImage && item.findingsImage.length > 500 ? '' : item.findingsImage,
-            actionImage: item.actionImage && item.actionImage.length > 500 ? '' : item.actionImage,
-          };
-        }
-        return item;
-      });
-      localStorage.setItem(STANDALONE_INSPECTION_STORAGE_KEY, JSON.stringify(sanitized));
-    } catch (fallbackErr) {
-      console.error('Failed to save even with fallback:', fallbackErr);
+    const data = await fetchStandaloneInspectionsFromSheets();
+    if (Array.isArray(data)) {
+      currentStandaloneInspectionsInMemory = data;
     }
+  } catch {
+    // Silent catch when server connection is unconfigured or unreachable
   }
+  return currentStandaloneInspectionsInMemory;
 }
 
-export function createStandaloneInspection(
+export async function createStandaloneInspection(
   data: Omit<StandaloneInspectionItem, 'id' | 'createdAt' | 'updatedAt'>
-): StandaloneInspectionItem {
-  const items = getStandaloneInspections();
-  const nextNum = items.length + 1001;
-  const newId = `INSP-${nextNum}`;
+): Promise<StandaloneInspectionItem | null> {
+  const newId = `INSP-${Date.now().toString().slice(-6)}`;
   const now = new Date().toISOString();
 
   const newItem: StandaloneInspectionItem = {
@@ -66,11 +43,7 @@ export function createStandaloneInspection(
     updatedAt: now,
   };
 
-  const updated = [newItem, ...items];
-  saveStandaloneInspections(updated);
-
-  // Sync to Google Sheets
-  syncStandaloneInspectionToSheets('createStandaloneInspection', {
+  const success = await syncStandaloneInspectionToSheets('createStandaloneInspection', {
     ID: newItem.id,
     UNIT_ID: newItem.unitId,
     UNIT_MODEL: newItem.unitModel || '',
@@ -89,20 +62,20 @@ export function createStandaloneInspection(
     UPDATED_AT: newItem.updatedAt,
   });
 
-  return newItem;
+  if (success) {
+    await fetchStandaloneInspections();
+    return newItem;
+  }
+  return null;
 }
 
-export function updateStandaloneInspection(
+export async function updateStandaloneInspection(
   item: StandaloneInspectionItem
-): StandaloneInspectionItem[] {
-  const items = getStandaloneInspections();
+): Promise<boolean> {
   const now = new Date().toISOString();
   const updatedItem = { ...item, updatedAt: now };
-  const updated = items.map((i) => (i.id === item.id ? updatedItem : i));
-  saveStandaloneInspections(updated);
 
-  // Sync to Google Sheets
-  syncStandaloneInspectionToSheets('updateStandaloneInspection', {
+  const success = await syncStandaloneInspectionToSheets('updateStandaloneInspection', {
     ID: updatedItem.id,
     UNIT_ID: updatedItem.unitId,
     UNIT_MODEL: updatedItem.unitModel || '',
@@ -120,18 +93,18 @@ export function updateStandaloneInspection(
     UPDATED_AT: updatedItem.updatedAt,
   });
 
-  return updated;
+  if (success) {
+    await fetchStandaloneInspections();
+  }
+  return success;
 }
 
-export function deleteStandaloneInspection(id: string): StandaloneInspectionItem[] {
-  const items = getStandaloneInspections();
-  const updated = items.filter((i) => i.id !== id);
-  saveStandaloneInspections(updated);
-
-  // Sync delete to Google Sheets
-  syncStandaloneInspectionToSheets('deleteStandaloneInspection', { ID: id });
-
-  return updated;
+export async function deleteStandaloneInspection(id: string): Promise<boolean> {
+  const success = await syncStandaloneInspectionToSheets('deleteStandaloneInspection', { ID: id });
+  if (success) {
+    await fetchStandaloneInspections();
+  }
+  return success;
 }
 
 export function calculateStandaloneInspectionStats(

@@ -1,8 +1,31 @@
 import { MasterUnit, MasterModelDerived, CsvValidationPreview } from '../types/masterUnit';
-import { RAW_MASTER_UNITS_CSV } from '../data/initialMasterUnitsCsv';
-import { fetchMasterUnitsFromSheets, syncUnitToSheets } from './googleSheets';
+import { fetchMasterUnitsFromSheets, syncUnitToSheets, isScriptUrlConfigured } from './googleSheets';
 
-export const MASTER_UNITS_STORAGE_KEY = 'cbm_master_units_v1';
+let currentMasterUnitsInMemory: MasterUnit[] = [];
+
+/**
+ * Synchronously returns current master units list.
+ * Guaranteed to return an array (MasterUnit[]).
+ */
+export function getMasterUnits(): MasterUnit[] {
+  return currentMasterUnitsInMemory;
+}
+
+/**
+ * Asynchronously fetches master units directly from Google Sheets API.
+ */
+export async function fetchMasterUnits(): Promise<MasterUnit[]> {
+  if (!isScriptUrlConfigured()) return currentMasterUnitsInMemory;
+  try {
+    const data = await fetchMasterUnitsFromSheets();
+    if (Array.isArray(data)) {
+      currentMasterUnitsInMemory = data;
+    }
+  } catch {
+    // Silent catch when server connection is unconfigured or unreachable
+  }
+  return currentMasterUnitsInMemory;
+}
 
 /**
  * Parses CSV text (semicolon or comma delimited) into MasterUnit objects
@@ -17,7 +40,6 @@ export function parseMasterUnitsCsv(csvText: string): MasterUnit[] {
   const delimiter = headerLine.includes(';') ? ';' : ',';
   const headers = headerLine.split(delimiter).map((h) => h.trim().toLowerCase());
 
-  // Find column indices
   let unitCodeIdx = headers.findIndex((h) => h.includes('unit') && (h.includes('code') || h.includes('id')));
   if (unitCodeIdx === -1) unitCodeIdx = 0;
 
@@ -65,52 +87,21 @@ export function parseMasterUnitsCsv(csvText: string): MasterUnit[] {
 }
 
 /**
- * Loads master units from localStorage. Returns empty array if none exist or cleared.
+ * Clears all master units from Google Sheets
  */
-export function getMasterUnits(): MasterUnit[] {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  try {
-    const stored = localStorage.getItem(MASTER_UNITS_STORAGE_KEY);
-    if (!stored) {
-      localStorage.setItem(MASTER_UNITS_STORAGE_KEY, JSON.stringify([]));
-      return [];
-    }
-
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-
-    return [];
-  } catch (err) {
-    console.error('Error loading master units from storage:', err);
-    return [];
-  }
+export async function clearAllUnits(): Promise<boolean> {
+  const ok = await syncUnitToSheets('importUnits', { units: [] });
+  if (ok) currentMasterUnitsInMemory = [];
+  return ok;
 }
 
 /**
- * Clears all master units from storage and sheets
+ * Saves master units array to Google Sheets
  */
-export function clearAllUnits(): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(MASTER_UNITS_STORAGE_KEY, JSON.stringify([]));
-  syncUnitToSheets('importUnits', { units: [] });
-}
-
-/**
- * Saves master units array to persistent storage and Google Sheets
- */
-export function saveMasterUnits(units: MasterUnit[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(MASTER_UNITS_STORAGE_KEY, JSON.stringify(units));
-    syncUnitToSheets('importUnits', { units });
-  } catch (err) {
-    console.error('Error saving master units to storage:', err);
-  }
+export async function saveMasterUnits(units: MasterUnit[]): Promise<boolean> {
+  const ok = await syncUnitToSheets('importUnits', { units });
+  if (ok) currentMasterUnitsInMemory = units;
+  return ok;
 }
 
 /**
@@ -160,13 +151,12 @@ export function deriveMasterModels(units: MasterUnit[]): MasterModelDerived[] {
     });
   });
 
-  // Sort by Model name alphabetically
   list.sort((a, b) => a.model.localeCompare(b.model));
   return list;
 }
 
 /**
- * Validates a CSV string against the current Master Units
+ * Validates a CSV string against current Master Units
  */
 export function validateCsvImport(csvContent: string, currentUnits: MasterUnit[]): CsvValidationPreview {
   const lines = csvContent.split(/\r?\n/).filter((l) => l.trim().length > 0);
@@ -217,7 +207,6 @@ export function validateCsvImport(csvContent: string, currentUnits: MasterUnit[]
     const manufacturer = cols[manufactureIdx] || '';
     const section = cols[sectionIdx] || '';
 
-    // Validation: none of the 4 columns can be empty
     const missing: string[] = [];
     if (!unitCode) missing.push('Unit Code');
     if (!unitModel) missing.push('Unit Model');
@@ -234,8 +223,6 @@ export function validateCsvImport(csvContent: string, currentUnits: MasterUnit[]
     }
 
     const codeKey = unitCode.toUpperCase();
-
-    // Check duplicate within existing database
     const existing = existingMap.get(codeKey);
     const incomingItem = {
       unitCode,
@@ -256,7 +243,6 @@ export function validateCsvImport(csvContent: string, currentUnits: MasterUnit[]
       continue;
     }
 
-    // Check duplicate within the same batch
     if (seenInBatch.has(codeKey)) {
       duplicates.push({
         unitCode,
@@ -285,17 +271,17 @@ export function validateCsvImport(csvContent: string, currentUnits: MasterUnit[]
 }
 
 /**
- * Executes CSV import and updates persistent storage
+ * Executes CSV import and sends updated list to Google Sheets
  */
-export function executeCsvImport(
+export async function executeCsvImport(
   preview: CsvValidationPreview,
   duplicateAction: 'skip' | 'update',
   currentUnits: MasterUnit[]
-): {
+): Promise<{
   updatedList: MasterUnit[];
   importedCount: number;
   updatedCount: number;
-} {
+}> {
   const unitsMap = new Map<string, MasterUnit>();
   currentUnits.forEach((u) => {
     unitsMap.set(u.unitCode.trim().toUpperCase(), { ...u });
@@ -304,7 +290,6 @@ export function executeCsvImport(
   let importedCount = 0;
   let updatedCount = 0;
 
-  // Add all strictly valid non-duplicate rows
   preview.validItems.forEach((item) => {
     const key = item.unitCode.trim().toUpperCase();
     if (!unitsMap.has(key)) {
@@ -316,7 +301,6 @@ export function executeCsvImport(
     }
   });
 
-  // Handle duplicate rows
   if (duplicateAction === 'update') {
     preview.duplicates.forEach((d) => {
       const key = d.unitCode.trim().toUpperCase();
@@ -341,7 +325,7 @@ export function executeCsvImport(
   }
 
   const updatedList = Array.from(unitsMap.values());
-  saveMasterUnits(updatedList);
+  await saveMasterUnits(updatedList);
 
   return {
     updatedList,

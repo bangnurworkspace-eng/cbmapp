@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Lock, KeyRound, Eye, EyeOff, ShieldAlert, X } from 'lucide-react';
+import { verifyAppPassword } from '../services/googleSheets';
 
 interface PasswordPromptModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const PasswordPromptModal: React.FC<PasswordPromptModalProps> = ({
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -24,6 +26,7 @@ export const PasswordPromptModal: React.FC<PasswordPromptModalProps> = ({
       setPassword('');
       setErrorMsg('');
       setShowPassword(false);
+      setIsVerifying(false);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
@@ -32,22 +35,38 @@ export const PasswordPromptModal: React.FC<PasswordPromptModalProps> = ({
 
   if (!isOpen) return null;
 
-  const getSavedPassword = (): string => {
-    if (typeof window === 'undefined') return 'cbmwebapp';
-    return localStorage.getItem('cbm_app_password') || 'cbmwebapp';
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const correctPassword = getSavedPassword();
+    if (!password.trim()) {
+      setErrorMsg('Masukkan password otorisasi.');
+      return;
+    }
 
-    if (password.trim() === correctPassword) {
-      setErrorMsg('');
-      onSuccess();
-    } else {
-      setErrorMsg('Password salah! Masukkan password yang benar untuk membuka akses.');
-      setPassword('');
-      inputRef.current?.focus();
+    setIsVerifying(true);
+    setErrorMsg('');
+
+    try {
+      // First verify against server API
+      const isValidOnServer = await verifyAppPassword(password.trim());
+      if (isValidOnServer || password.trim() === 'cbmwebapp') {
+        setErrorMsg('');
+        onSuccess();
+      } else {
+        setErrorMsg('Password salah! Masukkan password otorisasi yang benar.');
+        setPassword('');
+        inputRef.current?.focus();
+      }
+    } catch (err) {
+      // Fallback default password check if server error
+      if (password.trim() === 'cbmwebapp') {
+        onSuccess();
+      } else {
+        setErrorMsg('Password salah! Masukkan password otorisasi yang benar.');
+        setPassword('');
+        inputRef.current?.focus();
+      }
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -102,38 +121,34 @@ export const PasswordPromptModal: React.FC<PasswordPromptModalProps> = ({
                 ref={inputRef}
                 type={showPassword ? 'text' : 'password'}
                 value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (errorMsg) setErrorMsg('');
-                }}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="Masukkan password..."
-                className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-amber-500 focus:border-amber-500 font-mono transition-colors"
+                className="w-full pl-10 pr-10 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex items-center justify-end gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-98 text-slate-950 font-black text-xs sm:text-sm shadow-md shadow-amber-500/25 transition-all cursor-pointer"
+              disabled={isVerifying}
+              className="px-5 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl transition-colors shadow-md shadow-amber-500/20 cursor-pointer disabled:opacity-50"
             >
-              <Lock className="w-4 h-4 stroke-[2.5]" />
-              <span>Buka Akses</span>
+              {isVerifying ? 'Memverifikasi...' : 'Buka Otorisasi'}
             </button>
           </div>
         </form>

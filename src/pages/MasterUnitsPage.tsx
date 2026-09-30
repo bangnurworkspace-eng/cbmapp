@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MasterUnit, CsvValidationPreview } from '../types/masterUnit';
 import {
   getMasterUnits,
+  fetchMasterUnits,
   saveMasterUnits,
   validateCsvImport,
   executeCsvImport,
@@ -36,6 +37,17 @@ interface MasterUnitsPageProps {
 
 export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToInspection }) => {
   const [units, setUnits] = useState<MasterUnit[]>(() => getMasterUnits());
+
+  // Load units directly from Google Sheets API
+  useEffect(() => {
+    let active = true;
+    fetchMasterUnits().then((data) => {
+      if (active) setUnits(data);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -164,7 +176,7 @@ export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToIn
     setIsAddEditModalOpen(true);
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -191,7 +203,6 @@ export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToIn
     }
 
     if (editingUnit) {
-      // Check if code changed to an already existing unit code
       if (
         cleanCode !== editingUnit.unitCode.toUpperCase() &&
         units.some((u) => u.unitCode.toUpperCase() === cleanCode)
@@ -214,10 +225,9 @@ export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToIn
           : u
       );
       setUnits(updated);
-      saveMasterUnits(updated);
+      await saveMasterUnits(updated);
       triggerToast(`Unit "${cleanCode}" berhasil diperbarui.`);
     } else {
-      // Check duplicate
       if (units.some((u) => u.unitCode.toUpperCase() === cleanCode)) {
         setFormError(`Unit Code "${cleanCode}" sudah ada di database Master Units.`);
         return;
@@ -236,25 +246,25 @@ export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToIn
 
       const updated = [newUnit, ...units];
       setUnits(updated);
-      saveMasterUnits(updated);
+      await saveMasterUnits(updated);
       triggerToast(`Unit baru "${cleanCode}" berhasil ditambahkan.`);
     }
 
     setIsAddEditModalOpen(false);
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
     const targetCode = deleteTarget.unitCode;
     const updated = units.filter((u) => u.id !== deleteTarget.id);
     setUnits(updated);
-    saveMasterUnits(updated);
+    await saveMasterUnits(updated);
     triggerToast(`Unit "${targetCode}" berhasil dihapus.`);
     setDeleteTarget(null);
   };
 
-  const handleExecuteClearAll = () => {
-    clearAllUnits();
+  const handleExecuteClearAll = async () => {
+    await clearAllUnits();
     setUnits([]);
     setIsClearAllModalOpen(false);
     triggerToast('Seluruh data Master Units berhasil dihapus.');
@@ -297,24 +307,22 @@ export const MasterUnitsPage: React.FC<MasterUnitsPageProps> = ({ onNavigateToIn
     reader.readAsText(file);
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!importPreview) return;
     setIsProcessingImport(true);
 
-    setTimeout(() => {
-      const res = executeCsvImport(importPreview, duplicateAction, units);
-      setUnits(res.updatedList);
-      setIsProcessingImport(false);
-      setIsImportModalOpen(false);
-      setImportFile(null);
-      setImportPreview(null);
+    const res = await executeCsvImport(importPreview, duplicateAction, units);
+    setUnits(res.updatedList);
+    setIsProcessingImport(false);
+    setIsImportModalOpen(false);
+    setImportFile(null);
+    setImportPreview(null);
 
-      triggerToast(
-        `Import selesai: ${res.importedCount} unit baru ditambahkan${
-          res.updatedCount > 0 ? `, ${res.updatedCount} unit diperbarui` : ''
-        }.`
-      );
-    }, 200);
+    triggerToast(
+      `Import selesai: ${res.importedCount} unit baru ditambahkan${
+        res.updatedCount > 0 ? `, ${res.updatedCount} unit diperbarui` : ''
+      }.`
+    );
   };
 
   const getSectionBadgeClass = (sec: string) => {

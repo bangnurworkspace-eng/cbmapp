@@ -15,6 +15,8 @@ import {
   updateInspection,
   deleteInspection,
   getGoogleAppsScriptUrl,
+  fetchSettingsFromSheets,
+  saveSettingsToSheets,
 } from './services/googleSheets';
 
 // Pages
@@ -33,17 +35,11 @@ import { UnitHistory } from './pages/UnitHistory';
 import { MasterComponentPage } from './pages/MasterComponentPage';
 import { MasterUnitsPage } from './pages/MasterUnitsPage';
 import { Settings } from './pages/Settings';
-import { getMasterUnits, saveMasterUnits } from './services/masterUnitService';
-import { getMasterComponents, saveMasterComponents } from './services/masterComponentService';
-import { getFollowUpItems, saveFollowUpItems } from './services/followUpService';
-import { getStandaloneInspections, saveStandaloneInspections } from './services/standaloneInspectionService';
+import { getMasterUnits, fetchMasterUnits } from './services/masterUnitService';
+import { getMasterComponents, fetchMasterComponents } from './services/masterComponentService';
+import { getFollowUpItems, fetchFollowUpItems } from './services/followUpService';
+import { getStandaloneInspections, fetchStandaloneInspections } from './services/standaloneInspectionService';
 import { isDateInRange } from './utils/calculations';
-import {
-  fetchMasterUnitsFromSheets,
-  fetchMasterComponentsFromSheets,
-  fetchFollowUpsFromSheets,
-  fetchStandaloneInspectionsFromSheets,
-} from './services/googleSheets';
 import {
   exportInspectionsToExcel,
   exportMasterUnitsToExcel,
@@ -54,7 +50,7 @@ import {
 import {
   BrandingSettings,
   getBrandingSettings,
-  saveBrandingSettings,
+  setBrandingInMemory,
   applyFavicon,
 } from './services/brandingService';
 import { CheckCircle2 } from 'lucide-react';
@@ -71,10 +67,15 @@ export default function App() {
     applyFavicon(branding.faviconUrl);
   }, [branding.faviconUrl]);
 
-  const handleUpdateBranding = (newSettings: BrandingSettings) => {
-    saveBrandingSettings(newSettings);
-    setBranding(newSettings);
-    showToast('Pengaturan logo & identitas aplikasi berhasil disimpan!');
+  const handleUpdateBranding = async (newSettings: BrandingSettings) => {
+    const ok = await saveSettingsToSheets(newSettings);
+    if (ok) {
+      setBrandingInMemory(newSettings);
+      setBranding(newSettings);
+      showToast('Pengaturan logo & identitas aplikasi berhasil disimpan di Google Sheets!');
+    } else {
+      showToast('Gagal menyimpan pengaturan: Database Google Sheets belum terhubung.');
+    }
   };
 
   // Global filters
@@ -138,13 +139,11 @@ export default function App() {
   // Splash Screen State
   const [showSplash, setShowSplash] = useState<boolean>(true);
 
-  // Auto-refresh config (default 30 seconds = 30000ms)
-  const [refreshInterval, setRefreshInterval] = useState<number>(30000);
+  // Auto-refresh config (default 8 seconds = 8000ms for fast cloud polling)
+  const [refreshInterval, setRefreshInterval] = useState<number>(8000);
 
-  // Dark / Light Mode
+  // Dark / Light Mode (React state / system media query preference, zero localStorage)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('cbm_theme');
-    if (saved === 'dark' || saved === 'light') return saved;
     if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       return 'dark';
     }
@@ -160,7 +159,6 @@ export default function App() {
       root.classList.remove('dark');
       root.setAttribute('data-theme', 'light');
     }
-    localStorage.setItem('cbm_theme', theme);
   }, [theme]);
 
   const toggleTheme = () => {
@@ -214,53 +212,42 @@ export default function App() {
     }, 3500);
   };
 
-  // Fetch data
+  // Fetch data directly from Google Sheets API
   const loadData = useCallback(async (isBackground = false) => {
     if (!isBackground) {
       setIsRefreshing(true);
     }
 
     try {
-      // 1. Fetch Inspections
+      // 1. Fetch Inspections from Google Sheets
       const response = await fetchInspections();
-      if (response.data) {
+      if (response.success && response.data) {
         setInspections(response.data);
         setLastSynced(new Date());
-        setIsError(!response.success && Boolean(response.error));
-        if (response.error) {
-          setErrorMessage(response.message || 'Warning: Unable to synchronize with database.');
-        } else {
-          setIsError(false);
-          setErrorMessage('');
-        }
+        setIsError(false);
+        setErrorMessage('');
+      } else {
+        setIsError(true);
+        setErrorMessage(response.message || 'Unable to connect to database.');
       }
 
-      // 2. Fetch Master Units if Google Sheets is connected
-      const remoteUnits = await fetchMasterUnitsFromSheets();
-      if (remoteUnits && remoteUnits.length > 0) {
-        saveMasterUnits(remoteUnits);
-      }
+      // 2. Fetch Master Units, Master Components, Follow Ups, and Standalone Inspections
+      await Promise.allSettled([
+        fetchMasterUnits(),
+        fetchMasterComponents(),
+        fetchFollowUpItems(),
+        fetchStandaloneInspections(),
+      ]);
 
-      // 3. Fetch Master Components if Google Sheets is connected
-      const remoteComponents = await fetchMasterComponentsFromSheets();
-      if (remoteComponents && remoteComponents.length > 0) {
-        saveMasterComponents(remoteComponents);
-      }
-
-      // 4. Fetch Follow Ups if Google Sheets is connected
-      const remoteFollowUps = await fetchFollowUpsFromSheets();
-      if (remoteFollowUps && remoteFollowUps.length > 0) {
-        saveFollowUpItems(remoteFollowUps);
-      }
-
-      // 5. Fetch Standalone Inspections if Google Sheets is connected
-      const remoteStandalone = await fetchStandaloneInspectionsFromSheets();
-      if (remoteStandalone && remoteStandalone.length > 0) {
-        saveStandaloneInspections(remoteStandalone);
+      // 3. Fetch Branding & Settings from Google Sheets
+      const settings = await fetchSettingsFromSheets();
+      if (settings) {
+        setBrandingInMemory(settings);
+        setBranding(settings);
       }
     } catch (err: any) {
       setIsError(true);
-      setErrorMessage(err.message || 'Failed to fetch inspections from database.');
+      setErrorMessage(err.message || 'Unable to connect to database.');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -272,7 +259,7 @@ export default function App() {
     loadData(false);
   }, [loadData]);
 
-  // Periodic Auto-refresh
+  // Periodic Auto-refresh (polling)
   useEffect(() => {
     if (refreshInterval <= 0) return;
     const interval = setInterval(() => {
@@ -289,24 +276,18 @@ export default function App() {
     );
   }, [inspections, startDate, endDate]);
 
-  // List of unique equipment models across dataset & master catalog for the model filter
+  // List of unique equipment models across dataset
   const uniqueModels = useMemo(() => {
     const set = new Set<string>();
-    getMasterUnits().forEach((u) => {
-      if (u.unitModel && u.unitModel.trim()) set.add(u.unitModel.trim());
-    });
     inspections.forEach((i) => {
       if (i.model && i.model.trim()) set.add(i.model.trim());
     });
     return Array.from(set).sort();
   }, [inspections]);
 
-  // List of unique components from Master Components and live inspections
+  // List of unique components from live inspections
   const uniqueComponents = useMemo(() => {
     const set = new Set<string>();
-    getMasterComponents().forEach((c) => {
-      if (c.componentName && c.componentName.trim()) set.add(c.componentName.trim());
-    });
     inspections.forEach((i) => {
       if (i.component && i.component.trim() && i.component !== '-') set.add(i.component.trim());
     });
@@ -344,22 +325,25 @@ export default function App() {
     data: Omit<Inspection, 'id' | 'createdAt'>
   ): Promise<boolean> => {
     const res = await createInspection(data);
-    if (res.data) {
-      setInspections((prev) => [res.data!, ...prev.filter((i) => i.id !== res.data!.id)]);
-      setLastSynced(new Date());
+    if (res.success && res.data) {
+      await loadData(false);
       showToast(res.message || 'Inspection saved successfully!');
       return true;
+    } else {
+      showToast(res.message || 'Unable to connect to database.');
+      return false;
     }
-    return false;
   };
 
   // Handle updating follow-up status in database
   const handleUpdateInspection = async (updated: Inspection) => {
     const res = await updateInspection(updated);
-    setInspections((prev) =>
-      prev.map((item) => (item.id === updated.id ? updated : item))
-    );
-    showToast('Inspection status updated successfully.');
+    if (res.success) {
+      await loadData(false);
+      showToast('Inspection status updated successfully.');
+    } else {
+      showToast('Unable to connect to database.');
+    }
   };
 
   // Handle opening edit modal
@@ -370,15 +354,14 @@ export default function App() {
   // Handle saving edited inspection
   const handleSaveEditInspection = async (updated: Inspection): Promise<boolean> => {
     const res = await updateInspection(updated);
-    if (res.success || res.data) {
-      setInspections((prev) =>
-        prev.map((item) => (item.id === updated.id ? updated : item))
-      );
-      setLastSynced(new Date());
+    if (res.success) {
+      await loadData(false);
       showToast('Data inspeksi berhasil diperbarui!');
       return true;
+    } else {
+      showToast('Unable to connect to database.');
+      return false;
     }
-    return false;
   };
 
   // Handle opening delete confirmation
@@ -388,25 +371,32 @@ export default function App() {
 
   // Handle executing delete
   const handleConfirmDeleteInspection = async (id: string) => {
-    await deleteInspection(id);
-    setInspections((prev) => prev.filter((item) => item.id !== id));
-    setLastSynced(new Date());
-    showToast('Data inspeksi berhasil dihapus.');
+    const res = await deleteInspection(id);
+    if (res.success) {
+      await loadData(false);
+      showToast('Data inspeksi berhasil dihapus.');
+    } else {
+      showToast('Unable to connect to database.');
+    }
   };
 
   // Handle Global Export Excel depending on current page
-  const handleGlobalExportExcel = () => {
+  const handleGlobalExportExcel = async () => {
     if (currentPage === 'master-units') {
-      exportMasterUnitsToExcel(getMasterUnits());
+      const units = await getMasterUnits();
+      exportMasterUnitsToExcel(units);
       showToast('Data Master Units berhasil diexport ke Excel!');
     } else if (currentPage === 'master-component') {
-      exportMasterComponentsToExcel(getMasterComponents());
+      const comps = await getMasterComponents();
+      exportMasterComponentsToExcel(comps);
       showToast('Data Master Components berhasil diexport ke Excel!');
     } else if (currentPage === 'followup') {
-      exportFollowUpsToExcel(getFollowUpItems());
+      const flus = await getFollowUpItems();
+      exportFollowUpsToExcel(flus);
       showToast('Data Follow Up Tasks berhasil diexport ke Excel!');
     } else if (currentPage === 'inspection') {
-      exportStandaloneInspectionsToExcel(getStandaloneInspections());
+      const st = await getStandaloneInspections();
+      exportStandaloneInspectionsToExcel(st);
       showToast('Data Standalone Inspections berhasil diexport ke Excel!');
     } else {
       const pageName = pageTitleMap[currentPage] || 'Inspections';

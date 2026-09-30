@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { FollowUpItem, FollowUpTaskStatus, FollowUpPriority } from '../types/followUp';
 import {
   getFollowUpItems,
-  saveFollowUpItems,
+  fetchFollowUpItems,
   createFollowUpItem,
   updateFollowUpItem,
   deleteFollowUpItem,
@@ -87,9 +87,8 @@ export const FollowUp: React.FC<FollowUpProps> = ({ startDate = '', endDate = ''
   // Sync / refresh items from Google Sheets on mount
   useEffect(() => {
     let isMounted = true;
-    fetchFollowUpsFromSheets().then((remote) => {
-      if (isMounted && remote && remote.length > 0) {
-        saveFollowUpItems(remote);
+    fetchFollowUpItems().then((remote) => {
+      if (isMounted) {
         setItems(remote);
       }
     });
@@ -180,7 +179,7 @@ export const FollowUp: React.FC<FollowUpProps> = ({ startDate = '', endDate = ''
   };
 
   // Save / Submit Input Follow Up
-  const handleSubmitForm = (e: React.FormEvent) => {
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -227,11 +226,12 @@ export const FollowUp: React.FC<FollowUpProps> = ({ startDate = '', endDate = ''
         notes: formNotes.trim() || undefined,
       };
 
-      const newList = updateFollowUpItem(updatedItem);
+      await updateFollowUpItem(updatedItem);
+      const newList = await getFollowUpItems();
       setItems(newList);
       showToast(`Follow Up ${editingItem.id} berhasil diperbarui!`);
     } else {
-      createFollowUpItem({
+      await createFollowUpItem({
         unitId: cleanUnit,
         unitModel: cleanModel || undefined,
         date: cleanDate,
@@ -243,7 +243,8 @@ export const FollowUp: React.FC<FollowUpProps> = ({ startDate = '', endDate = ''
         dueDate: formDueDate.trim() || undefined,
         notes: formNotes.trim() || undefined,
       });
-      setItems(getFollowUpItems());
+      const newList = await getFollowUpItems();
+      setItems(newList);
       showToast('Follow Up baru berhasil ditambahkan!');
     }
 
@@ -251,16 +252,18 @@ export const FollowUp: React.FC<FollowUpProps> = ({ startDate = '', endDate = ''
   };
 
   // Quick Status Change directly from table
-  const handleQuickStatusChange = (item: FollowUpItem, newStatus: FollowUpTaskStatus) => {
-    const updated = updateFollowUpItem({ ...item, status: newStatus });
+  const handleQuickStatusChange = async (item: FollowUpItem, newStatus: FollowUpTaskStatus) => {
+    await updateFollowUpItem({ ...item, status: newStatus });
+    const updated = await getFollowUpItems();
     setItems(updated);
     showToast(`Status ${item.id} diubah ke ${newStatus}`, 'info');
   };
 
   // Confirm Delete
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deletingId) return;
-    const updated = deleteFollowUpItem(deletingId);
+    await deleteFollowUpItem(deletingId);
+    const updated = await getFollowUpItems();
     setItems(updated);
     setDeletingId(null);
     showToast('Data Follow Up berhasil dihapus.', 'info');

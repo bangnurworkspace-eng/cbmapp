@@ -1,41 +1,36 @@
-import { FollowUpItem, FollowUpStats, FollowUpTaskStatus } from '../types/followUp';
-import { syncFollowUpToSheets, fetchFollowUpsFromSheets } from './googleSheets';
+import { FollowUpItem, FollowUpStats } from '../types/followUp';
+import { syncFollowUpToSheets, fetchFollowUpsFromSheets, isScriptUrlConfigured } from './googleSheets';
 
-export const FOLLOWUP_STORAGE_KEY = 'cbm_standalone_followup_v2';
+let currentFollowUpsInMemory: FollowUpItem[] = [];
 
+/**
+ * Synchronously returns current follow ups list.
+ * Guaranteed to return an array (FollowUpItem[]).
+ */
 export function getFollowUpItems(): FollowUpItem[] {
-  try {
-    const raw = localStorage.getItem(FOLLOWUP_STORAGE_KEY);
-    if (!raw) {
-      saveFollowUpItems([]);
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    saveFollowUpItems([]);
-    return [];
-  } catch (err) {
-    console.error('Error loading follow up items:', err);
-    return [];
-  }
+  return currentFollowUpsInMemory;
 }
 
-export function saveFollowUpItems(items: FollowUpItem[]): void {
+/**
+ * Asynchronously fetches follow ups directly from Google Sheets API.
+ */
+export async function fetchFollowUpItems(): Promise<FollowUpItem[]> {
+  if (!isScriptUrlConfigured()) return currentFollowUpsInMemory;
   try {
-    localStorage.setItem(FOLLOWUP_STORAGE_KEY, JSON.stringify(items));
-  } catch (err) {
-    console.error('Error saving follow up items:', err);
+    const data = await fetchFollowUpsFromSheets();
+    if (Array.isArray(data)) {
+      currentFollowUpsInMemory = data;
+    }
+  } catch {
+    // Silent catch when server connection is unconfigured or unreachable
   }
+  return currentFollowUpsInMemory;
 }
 
-export function createFollowUpItem(
+export async function createFollowUpItem(
   data: Omit<FollowUpItem, 'id' | 'createdAt' | 'updatedAt'>
-): FollowUpItem {
-  const items = getFollowUpItems();
-  const nextNum = items.length + 1001;
-  const newId = `FLU-${nextNum}`;
+): Promise<FollowUpItem | null> {
+  const newId = `FLU-${Date.now().toString().slice(-6)}`;
   const now = new Date().toISOString();
 
   const newItem: FollowUpItem = {
@@ -45,11 +40,7 @@ export function createFollowUpItem(
     updatedAt: now,
   };
 
-  const updated = [newItem, ...items];
-  saveFollowUpItems(updated);
-
-  // Sync create to Google Sheets
-  syncFollowUpToSheets('createFollowUp', {
+  const success = await syncFollowUpToSheets('createFollowUp', {
     ID: newItem.id,
     UNIT_ID: newItem.unitId,
     UNIT_MODEL: newItem.unitModel || '',
@@ -65,18 +56,18 @@ export function createFollowUpItem(
     UPDATED_AT: newItem.updatedAt,
   });
 
-  return newItem;
+  if (success) {
+    await fetchFollowUpItems();
+    return newItem;
+  }
+  return null;
 }
 
-export function updateFollowUpItem(item: FollowUpItem): FollowUpItem[] {
-  const items = getFollowUpItems();
+export async function updateFollowUpItem(item: FollowUpItem): Promise<boolean> {
   const now = new Date().toISOString();
   const updatedItem = { ...item, updatedAt: now };
-  const updated = items.map((i) => (i.id === item.id ? updatedItem : i));
-  saveFollowUpItems(updated);
 
-  // Sync update to Google Sheets
-  syncFollowUpToSheets('updateFollowUp', {
+  const success = await syncFollowUpToSheets('updateFollowUp', {
     ID: updatedItem.id,
     UNIT_ID: updatedItem.unitId,
     UNIT_MODEL: updatedItem.unitModel || '',
@@ -91,22 +82,18 @@ export function updateFollowUpItem(item: FollowUpItem): FollowUpItem[] {
     UPDATED_AT: updatedItem.updatedAt,
   });
 
-  return updated;
+  if (success) {
+    await fetchFollowUpItems();
+  }
+  return success;
 }
 
-export function deleteFollowUpItem(id: string): FollowUpItem[] {
-  const items = getFollowUpItems();
-  const updated = items.filter((i) => i.id !== id);
-  saveFollowUpItems(updated);
-
-  // Sync delete to Google Sheets
-  syncFollowUpToSheets('deleteFollowUp', { ID: id });
-
-  return updated;
-}
-
-export function clearAllFollowUps(): void {
-  saveFollowUpItems([]);
+export async function deleteFollowUpItem(id: string): Promise<boolean> {
+  const success = await syncFollowUpToSheets('deleteFollowUp', { ID: id });
+  if (success) {
+    await fetchFollowUpItems();
+  }
+  return success;
 }
 
 export function calculateFollowUpStats(items: FollowUpItem[]): FollowUpStats {

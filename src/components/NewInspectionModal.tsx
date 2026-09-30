@@ -170,9 +170,7 @@ export const NewInspectionModal: React.FC<NewInspectionModalProps> = ({
   const [findings, setFindings] = useState<string>('');
   const [recommendation, setRecommendation] = useState<string>('');
   const [rating, setRating] = useState<Rating>('A');
-  const [inspector, setInspector] = useState<string>(() => {
-    return typeof window !== 'undefined' ? localStorage.getItem('last_cbm_inspector') || '' : '';
-  });
+  const [inspector, setInspector] = useState<string>('');
   const [followUp, setFollowUp] = useState<string>('');
   const [followUpStatus, setFollowUpStatus] = useState<FollowUpStatus>('OPEN');
   const [dueDate, setDueDate] = useState<string>('');
@@ -295,9 +293,6 @@ export const NewInspectionModal: React.FC<NewInspectionModalProps> = ({
 
       const success = await onSave(payload);
       if (success) {
-        if (inspector.trim() && typeof window !== 'undefined') {
-          localStorage.setItem('last_cbm_inspector', inspector.trim());
-        }
         onClose();
       } else {
         setErrorMsg('Failed to record inspection in database.');

@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { Inspection } from '../types/inspection';
-import { MasterUnit } from '../services/masterUnitService';
-import { MasterComponent } from '../services/masterComponentService';
+import { MasterUnit } from '../types/masterUnit';
+import { MasterComponent } from '../types/masterComponent';
 import { FollowUpItem } from '../types/followUp';
 import { StandaloneInspectionItem } from '../types/standaloneInspection';
 
